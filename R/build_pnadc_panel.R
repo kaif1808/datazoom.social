@@ -24,7 +24,7 @@ build_pnadc_panel <- function(dat, panel) {
   ###########################
   ## Bind Global Variables ##
   ###########################
-
+  
   UPA <- V1008 <- V1014 <- id_dom <- V20082 <- V20081 <- V2008 <- V2007 <- NULL
   Ano <- Trimestre <- id_ind <- num_appearances <- V2003 <- id_rs <- NULL
   num_appearances_rs <- q_count_ind <- q_count_rs <- NULL
@@ -32,16 +32,16 @@ build_pnadc_panel <- function(dat, panel) {
   #############################
   ## Define Basic Parameters ## 
   #############################
-
+  
   # Check if the panel type is 'none'; if so, return the original data
   if (panel == "none") {
     return(dat)
   }
-
+  
   ##########################
   ## Basic Identification ##
   ##########################
-
+  
   # If the panel type is not 'none', perform basic identification steps
   if (panel != "none") {
     # Household identifier combines UPA, V1008, and V1014, creating an unique number for every combination of those variables, all through the function cur_group_id
@@ -50,7 +50,7 @@ build_pnadc_panel <- function(dat, panel) {
         id_dom = dplyr::cur_group_id(),
         .by = c(UPA, V1008, V1014)
       )
-
+    
     # Individual id combines the household id, sex (V2007), and date of birth (V20082, V20081, V2008), creating an unique number for every combination of those variables, all through the function cur_group_id
     dat <- dat %>%
       dplyr::mutate(
@@ -77,20 +77,20 @@ build_pnadc_panel <- function(dat, panel) {
       )
     )
   }
-
+  
   #############################
   ## Advanced Identification ##
   #############################
-
+  
   ## Stage 1:
-
+  
   if (!(panel %in% c("none", "basic"))) {
     m <- max(dat$id_ind, na.rm = TRUE) # to avoid overlap between id numbers
     # id_rs are always higher numbers than id_ind
     # remove NAs otherwise m is NA and all id_rs are NAs
-
+    
     # advanced identification is only run on previously unmatched individuals
-
+    
     dat <- dat %>%
       dplyr::mutate(
         id_rs = dplyr::cur_group_id() + m,
@@ -139,8 +139,8 @@ build_pnadc_panel <- function(dat, panel) {
           # no more than 5 appearances (or else errors are introduced)
           q_count_rs > q_count_ind & q_count_rs <= 5 ~ id_rs,
           
-          # if else stick to id_ind
-          TRUE ~ id_ind
+          # fallback: prefer id_ind if available, otherwise keep id_rs
+          TRUE ~ dplyr::coalesce(id_ind, id_rs)
         )
       )
     
@@ -149,35 +149,36 @@ build_pnadc_panel <- function(dat, panel) {
   ##########################
   ## Pasting panel number ##
   ##########################
-
+  
   # to avoid overlap when binding more than one panel (all ids are just counts from 1, ..., N)
-
+  # ifelse guards against as.hexmode(NA) which returns the string "NA" instead of a true NA
+  
   # basic panel
-  if ("id_ind" %in% names(dat)) {
-    # Create a logical mask for rows that are NOT NA
-    id_valid <- !is.na(dat$id_ind)
+  if (panel != "none") {
     
-    # Only update the valid rows
-    dat$id_ind[id_valid] <- paste0(
-      as.hexmode(dat$V1014[id_valid]), 
-      as.hexmode(dat$id_ind[id_valid])
+    dat$id_ind <- ifelse(
+      is.na(dat$id_ind),
+      NA_character_,
+      paste0(as.hexmode(dat$V1014), as.hexmode(dat$id_ind))
     )
+    
   }
   
-  # 2. Advanced Panel ID Fix
-  if ("id_rs" %in% names(dat)) {
-    rs_valid <- !is.na(dat$id_rs)
+  # advanced panel
+  if (!(panel %in% c("none", "basic"))) {
     
-    dat$id_rs[rs_valid] <- paste0(
-      as.hexmode(dat$V1014[rs_valid]), 
-      as.hexmode(dat$id_rs[rs_valid])
+    dat$id_rs <- ifelse(
+      is.na(dat$id_rs),
+      NA_character_,
+      paste0(as.hexmode(dat$V1014), as.hexmode(dat$id_rs))
     )
+    
   }
-
+  
   #################
   ## Return Data ##
   #################
-
+  
   # Return the modified dataset
   return(dat)
 }
