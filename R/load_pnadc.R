@@ -28,12 +28,12 @@
 #' @importFrom magrittr `%>%`
 #'
 #' @examplesIf interactive()
-#' 
+#' ### DO NOT RUN ###
 #' load_pnadc(
-#'   save_to = "Directory/You/Would/like/to/save/the/files",
+#'   save_to = getwd(),
 #'   years = 2016,
 #'   quarters = 1:4,
-#'   panel = "basic",
+#'   panel = "advanced",
 #'   raw_data = FALSE,
 #'   save_options = c(FALSE, FALSE)
 #' )
@@ -114,14 +114,10 @@ load_pnadc <- function(save_to = getwd(), years,
     param$years, param$quarters, # looping over the two parallel vector of years and quarters (this was previoulsy done in a "for" structure, but qwe optimized it)
     
     function(year, quarter) {
-      base::message(
-        paste0("Downloading PNADC ", year, " Q", quarter, "\n") # just generating a message so the user knows which file is being downloaded now
-      )
+      base::message(paste0("Downloading PNADC ", year, " Q", quarter, "\n"))
       
-      df <- get_pnadc(
-        year = year, quarter = quarter, labels = FALSE, design = FALSE) # downloading the file, design= FALSE returns to us just the dataframe with all variables in the PNADc)
+      df <- get_pnadc(year = year, quarter = quarter, labels = FALSE, design = FALSE)
       
-      # get_pnadc returns a message and the NULL object when download fails due to non-existing file
       if (is.null(df)) {
         return(NULL)
         
@@ -149,8 +145,11 @@ load_pnadc <- function(save_to = getwd(), years,
     }
   )
   
-  # erase NULL observations from source_files list
-  source_files <- purrr::compact(source_files)
+  # Remove NULL entries (failed downloads)
+  quarters_df_list <- purrr::compact(quarters_df_list)
+  
+  # Save all quarters to a single parquet file (list of data frames as separate row groups / named list)
+  quarters_parquet_path <- file.path(param$save_to, "pnadc_quarters.parquet")
   
   # bind all quarters into one data frame
   all_quarters <- purrr::list_rbind(source_files)
@@ -188,7 +187,7 @@ load_pnadc <- function(save_to = getwd(), years,
   ## Return Raw Data
   
   if (param$panel == "none") {
-    return(paste("Quarters saved to", param$save_to))
+    return(paste("Quarters saved to", quarters_parquet_path))
   }
   
   #################
@@ -271,7 +270,7 @@ load_pnadc <- function(save_to = getwd(), years,
   
   return(paste("Panel files saved to", param$save_to))
 }
-
+  
 ######################
 ## Data Engineering ##
 ######################

@@ -65,7 +65,32 @@ devtools::install_github("datazoompuc/datazoom.social")
 The `load_pnadc` function is a wrapper for
 [*`get_pnadc`*](https://www.rdocumentation.org/packages/PNADcIBGE/versions/0.7.0/topics/get_pnadc)
 from the package `PNADcIBGE`, with added identification algorithms to
-build a Panel.
+build a Panel. For any additional questions not related to the
+identification variables, please check with them.
+
+------------------------------------------------------------------------
+
+**Panel Structure:**
+
+The table below shows the first and last quarter (`ANOtrimestre`, e.g.
+`20121` = 2012 Q1) covered by each PNADC rotating panel:
+
+| Panel | Start |   End |
+|------:|------:|------:|
+|     1 | 20121 | 20124 |
+|     2 | 20121 | 20141 |
+|     3 | 20132 | 20152 |
+|     4 | 20143 | 20163 |
+|     5 | 20154 | 20174 |
+|     6 | 20171 | 20191 |
+|     7 | 20182 | 20202 |
+|     8 | 20193 | 20213 |
+|     9 | 20204 | 20224 |
+|    10 | 20221 | 20241 |
+|    11 | 20232 | 20252 |
+|    12 | 20243 | 20263 |
+|    13 | 20254 | 20274 |
+|    14 | 20271 | 20291 |
 
 ------------------------------------------------------------------------
 
@@ -154,7 +179,7 @@ load_pnadc(
 ```
 
 To download PNADC data and save panels as CSV but discard the
-intermediate quarters, run
+intermediate quarters parquet, run
 
 ``` r
 load_pnadc(
@@ -199,14 +224,14 @@ load_pnadc(
 6.  **save_options**: A logical vector of length 2 controlling file
     saving behaviour:
 
-    - `c(TRUE, TRUE)` (default): keeps the intermediate quarters after
-      panel is built; saves all files as `.csv`.
-    - `c(FALSE, TRUE)`: deletes the quarters after use; saves panel
-      files as `.csv`.
-    - `c(TRUE, FALSE)`: keeps the quarters; saves all files as
-      `.parquet` (a list of panel data frames).
-    - `c(FALSE, FALSE)`: deletes the quarters after use; saves panel
-      files as `.parquet`.
+    - `c(TRUE, TRUE)` (default): keeps the intermediate quarters parquet
+      after panel is built; saves panel files as `.csv`.
+    - `c(FALSE, TRUE)`: deletes the quarters parquet after use; saves
+      panel files as `.csv`.
+    - `c(TRUE, FALSE)`: keeps the quarters parquet; saves panel files as
+      a `.parquet` dataset.
+    - `c(FALSE, FALSE)`: deletes the quarters parquet after use; saves
+      panel files as a `.parquet` dataset.
 
 ------------------------------------------------------------------------
 
@@ -220,10 +245,8 @@ The function performs the following steps:
     If the `raw_data` option is `FALSE`, some PNADC variables are
     treated at this stage.
 
-2.  Split the data into panels by lazy-loading the parquet and filtering
-    by the panel variable `V1014`. Data from each panel `x` is saved to
-    `pnadc_panel_x.csv` or `pnadc_panel_x.parquet`, depending on
-    `save_options[2]`.
+2.  Split the data into panels by the panel variable `V1014`. Data from
+    each panel is saved depending on `save_options`.
 
 3.  Read each panel file and apply the identification algorithms defined
     in `build_pnadc_panel`.
@@ -241,6 +264,26 @@ The function performs the following steps:
 
 ## PNAD Panel Identification
 
+------------------------------------------------------------------------
+
+**Usage:**
+
+Basic Panel
+
+``` r
+
+panel_data <- build_pnadc_panel(dat = pnad_sample, panel = "basic")
+```
+
+Advanced Panel
+
+``` r
+
+panel_data <- build_pnadc_panel(dat = pnad_sample, panel = "advanced")
+```
+
+------------------------------------------------------------------------
+
 **Description**
 
 Our `load_pnadc` function uses the internal function `build_pnadc_panel`
@@ -254,8 +297,6 @@ de Emprego (PME) do IBGE”.
 ## Basic Identification
 
 The household identifier – stored as `id_dom` – combines the variables:
-
-- `UF` – State;
 
 - `UPA` – Primary Sampling Unit - PSU;
 
