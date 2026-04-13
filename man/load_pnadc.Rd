@@ -10,7 +10,8 @@ load_pnadc(
   quarters = 1:4,
   panel = "advanced",
   raw_data = FALSE,
-  save_options = c(TRUE, TRUE)
+  save_options = c(TRUE, TRUE),
+  vars = NULL
 )
 }
 \arguments{
@@ -37,6 +38,37 @@ are saved in \code{.csv} format.
 \item \code{c(FALSE, FALSE)}: does not save quarterly files; panel files
 are saved in \code{.parquet} format.
 }}
+
+\item{vars}{A \code{character} vector of additional variable names to be
+downloaded, following the same convention as the \code{vars} parameter in
+\code{\link[PNADcIBGE]{get_pnadc}}. Each name must match a column in the
+PNADC microdata exactly as published by IBGE (e.g. \code{"VD4019"},
+\code{"V2009"}).
+
+Note that \code{\link[PNADcIBGE]{get_pnadc}} always returns a set of
+structural columns regardless of this argument — these include survey
+design weights (\code{V1027}, \code{V1028}, \code{V1028001}–\code{V1028200},
+\code{posest}, \code{posest_sxi}), deflator variables (\code{Habitual},
+\code{Efetivo}), and identifiers such as \code{UF}, \code{Estrato},
+\code{V1029}, \code{V1033}, \code{ID_DOMICILIO} — totalling around 233
+columns. The \code{vars} argument adds \emph{on top of} those columns;
+it does not restrict them. Use \code{NULL} (the default) to download all
+available microdata columns.
+
+If \code{panel} is not \code{"none"}, any columns required by the panel
+identification algorithm that are missing from \code{vars} will be added
+automatically and a \code{\link{warning}} will list the columns that were
+added. The required columns per algorithm are:
+\itemize{
+\item \code{"basic"}: \code{UPA}, \code{V1008}, \code{V1014},
+\code{V2007}, \code{V20082}, \code{V20081}, \code{V2008}.
+\item \code{"advanced"}: all of the above, plus \code{V2003}.
+}
+Note that several of these (\code{UPA}, \code{V1008}, \code{V1014}) are
+part of the structural columns always returned by
+\code{\link[PNADcIBGE]{get_pnadc}}, so in practice only \code{V2007},
+\code{V20082}, \code{V20081}, \code{V2008} (and \code{V2003} for
+\code{"advanced"}) are likely to be auto-added.}
 }
 \value{
 A message indicating the successful save of panel files.

@@ -31,7 +31,7 @@
 #'   design weights (\code{V1027}, \code{V1028}, \code{V1028001}–\code{V1028200},
 #'   \code{posest}, \code{posest_sxi}), deflator variables (\code{Habitual},
 #'   \code{Efetivo}), and identifiers such as \code{UF}, \code{Estrato},
-#'   \code{V1029}, \code{V1033}, \code{ID_DOMICILIO} — totalling around 210
+#'   \code{V1029}, \code{V1033}, \code{ID_DOMICILIO} — totalling around 233
 #'   columns. The \code{vars} argument adds \emph{on top of} those columns;
 #'   it does not restrict them. Use \code{NULL} (the default) to download all
 #'   available microdata columns.
