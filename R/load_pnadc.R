@@ -27,11 +27,11 @@
 #'   \code{"V2009"}).
 #'
 #'   Note that \code{\link[PNADcIBGE]{get_pnadc}} always returns a set of
-#'   structural columns regardless of this argument — these include survey
-#'   design weights (\code{V1027}, \code{V1028}, \code{V1028001}–\code{V1028200},
+#'   structural columns regardless of this argument, these include survey
+#'   design weights (\code{V1027}, \code{V1028}, \code{V1028001}, \code{V1028200},
 #'   \code{posest}, \code{posest_sxi}), deflator variables (\code{Habitual},
 #'   \code{Efetivo}), and identifiers such as \code{UF}, \code{Estrato},
-#'   \code{V1029}, \code{V1033}, \code{ID_DOMICILIO} — totalling around 233
+#'   \code{V1029}, \code{V1033}, \code{ID_DOMICILIO}, totalling around 233
 #'   columns. The \code{vars} argument adds \emph{on top of} those columns;
 #'   it does not restrict them. Use \code{NULL} (the default) to download all
 #'   available microdata columns.
@@ -150,7 +150,7 @@ load_pnadc <- function(save_to = getwd(), years,
         ".\n",
         "Note: PNADcIBGE::get_pnadc() always returns ~210 structural columns (weights, ",
         "deflators, identifiers) regardless of `vars`. The `vars` argument only adds ",
-        "columns on top of those — it does not restrict them.",
+        "columns on top of those, it does not restrict them.",
         call. = FALSE
       )
       vars <- c(vars, missing_cols)
