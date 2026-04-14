@@ -20,6 +20,36 @@
 #'     \item \code{c(FALSE, FALSE)}: does not save quarterly files; panel files
 #'       are saved in \code{.parquet} format.
 #'   }
+#' @param vars A \code{character} vector of additional variable names to be
+#'   downloaded, following the same convention as the \code{vars} parameter in
+#'   \code{\link[PNADcIBGE]{get_pnadc}}. Each name must match a column in the
+#'   PNADC microdata exactly as published by IBGE (e.g. \code{"VD4019"},
+#'   \code{"V2009"}).
+#'
+#'   Note that \code{\link[PNADcIBGE]{get_pnadc}} always returns a set of
+#'   structural columns regardless of this argument, these include survey
+#'   design weights (\code{V1027}, \code{V1028}, \code{V1028001}, \code{V1028200},
+#'   \code{posest}, \code{posest_sxi}), deflator variables (\code{Habitual},
+#'   \code{Efetivo}), and identifiers such as \code{UF}, \code{Estrato},
+#'   \code{V1029}, \code{V1033}, \code{ID_DOMICILIO}, totalling around 233
+#'   columns. The \code{vars} argument adds \emph{on top of} those columns;
+#'   it does not restrict them. Use \code{NULL} (the default) to download all
+#'   available microdata columns.
+#'
+#'   If \code{panel} is not \code{"none"}, any columns required by the panel
+#'   identification algorithm that are missing from \code{vars} will be added
+#'   automatically and a \code{\link{warning}} will list the columns that were
+#'   added. The required columns per algorithm are:
+#'   \itemize{
+#'     \item \code{"basic"}: \code{UPA}, \code{V1008}, \code{V1014},
+#'       \code{V2007}, \code{V20082}, \code{V20081}, \code{V2008}.
+#'     \item \code{"advanced"}: all of the above, plus \code{V2003}.
+#'   }
+#'   Note that several of these (\code{UPA}, \code{V1008}, \code{V1014}) are
+#'   part of the structural columns always returned by
+#'   \code{\link[PNADcIBGE]{get_pnadc}}, so in practice only \code{V2007},
+#'   \code{V20082}, \code{V20081}, \code{V2008} (and \code{V2003} for
+#'   \code{"advanced"}) are likely to be auto-added.
 #'
 #' @return A message indicating the successful save of panel files.
 #'
@@ -41,7 +71,8 @@
 
 load_pnadc <- function(save_to = getwd(), years,
                        quarters = 1:4, panel = "advanced",
-                       raw_data = FALSE, save_options = c(TRUE, TRUE)) {
+                       raw_data = FALSE, save_options = c(TRUE, TRUE),
+                       vars = NULL) {
   # Check if PNADcIBGE namespace is already attached
   if (!"PNADcIBGE" %in% .packages()) {
     # If not attached, attach it
@@ -99,6 +130,33 @@ load_pnadc <- function(save_to = getwd(), years,
   param$years    <- unlist(param$years)
   param$quarters <- unlist(param$quarters)
   
+  #####################
+  ## vars validation ##
+  #####################
+  
+  # Columns required to run the panel identification algorithms.
+  # These must always be present in the data regardless of the user's selection.
+  panel_required_basic    <- c("UPA", "V1008", "V1014", "V2007", "V20082", "V20081", "V2008")
+  panel_required_advanced <- c(panel_required_basic, "V2003")
+  
+  if (!is.null(vars) && param$panel != "none") {
+    required_cols <- if (param$panel == "advanced") panel_required_advanced else panel_required_basic
+    missing_cols  <- setdiff(required_cols, vars)
+    if (length(missing_cols) > 0) {
+      warning(
+        "The following columns required for panel identification were not in `vars` ",
+        "and have been added automatically: ",
+        paste(missing_cols, collapse = ", "),
+        ".\n",
+        "Note: PNADcIBGE::get_pnadc() always returns ~210 structural columns (weights, ",
+        "deflators, identifiers) regardless of `vars`. The `vars` argument only adds ",
+        "columns on top of those, it does not restrict them.",
+        call. = FALSE
+      )
+      vars <- c(vars, missing_cols)
+    }
+  }
+  
   ##################
   ## Loading data ##
   ##################
@@ -116,7 +174,7 @@ load_pnadc <- function(save_to = getwd(), years,
     function(year, quarter) {
       base::message(paste0("Downloading PNADC ", year, " Q", quarter, "\n"))
       
-      df <- get_pnadc(year = year, quarter = quarter, labels = FALSE, design = FALSE)
+      df <- get_pnadc(year = year, quarter = quarter, labels = FALSE, design = FALSE, vars = vars)
       
       if (is.null(df)) {
         return(NULL)
@@ -126,7 +184,7 @@ load_pnadc <- function(save_to = getwd(), years,
         df <- df %>%
           dplyr::mutate(dplyr::across(dplyr::everything(), as.numeric))
         
-        panel_list <<- c(panel_list, unique(df$V1014)) # registering, for every quarter, the panel's which the quarter's observations are included (every OBS is just included in one panel, but there should be OBS inserted in 2 to 3 panels for every quarter, check our READ-ME or the IBGE's website about the rotation scheme for PNADc surveys)
+        panel_list <<- c(panel_list, unique(df$V1014)) # registering, for every quarter, the panel's which the quarter's observations are included (every OBS is just included in one panel, but the data for a quarter contains observations of many panels)
         #<<- stabilishing a variable inside the function that continues to exist outside the function, it is not just local to the function's current context
         
         # runs data cleaning if desired
@@ -146,7 +204,7 @@ load_pnadc <- function(save_to = getwd(), years,
   )
   
   # Remove NULL entries (failed downloads)
-  quarters_df_list <- purrr::compact(quarters_df_list)
+  source_files <- purrr::compact(source_files)
   
   # Save all quarters to a single parquet file (list of data frames as separate row groups / named list)
   quarters_parquet_path <- file.path(param$save_to, "pnadc_quarters.parquet")
@@ -270,7 +328,7 @@ load_pnadc <- function(save_to = getwd(), years,
   
   return(paste("Panel files saved to", param$save_to))
 }
-  
+
 ######################
 ## Data Engineering ##
 ######################
@@ -282,348 +340,387 @@ treat_pnadc <- function(df) {
   UF <- regiao <- V2007 <- VD3004 <- VD4019 <- Habitual <- VD4002 <- V4012 <- NULL
   VD4001 <- V2009 <- ocupado <- desocupado <- forca_trab <- VD4005 <- VD4009 <- NULL
   VD4012 <- V4022 <- V4013 <- cnae_2dig <- V4010 <- cod_2dig <- NULL
+  V3002 <- V4074 <- V4074A <- fora_forca_trab <- NULL
   
   # regions
   
-  df <- df %>%
-    dplyr::mutate(
-      regiao = substr(UF, 1, 1),
-      regiao = dplyr::case_match(
-        regiao,
-        "1" ~ "Norte",
-        "2" ~ "Nordeste",
-        "3" ~ "Sudeste",
-        "4" ~ "Sul",
-        "5" ~ "Centro-Oeste"
+  if ("UF" %in% names(df)) {
+    df <- df %>%
+      dplyr::mutate(
+        regiao = substr(UF, 1, 1),
+        regiao = dplyr::case_match(
+          regiao,
+          "1" ~ "Norte",
+          "2" ~ "Nordeste",
+          "3" ~ "Sudeste",
+          "4" ~ "Sul",
+          "5" ~ "Centro-Oeste"
+        )
       )
-    )
-  
-  # states
-  
-  df <- df %>%
-    dplyr::mutate(
-      sigla_uf = dplyr::case_match(
-        UF,
-        11 ~ "RO",
-        12 ~ "AC",
-        13 ~ "AM",
-        14 ~ "RR",
-        15 ~ "PA",
-        16 ~ "AP",
-        17 ~ "TO",
-        21 ~ "MA",
-        22 ~ "PI",
-        23 ~ "CE",
-        24 ~ "RN",
-        25 ~ "PB",
-        26 ~ "PE",
-        27 ~ "AL",
-        28 ~ "SE",
-        29 ~ "BA",
-        31 ~ "MG",
-        32 ~ "ES",
-        33 ~ "RJ",
-        35 ~ "SP",
-        41 ~ "PR",
-        42 ~ "SC",
-        43 ~ "RS",
-        50 ~ "MS",
-        51 ~ "MT",
-        52 ~ "GO",
-        53 ~ "DF"
+    
+    # states (depend on UF as well)
+    df <- df %>%
+      dplyr::mutate(
+        sigla_uf = dplyr::case_match(
+          UF,
+          11 ~ "RO",
+          12 ~ "AC",
+          13 ~ "AM",
+          14 ~ "RR",
+          15 ~ "PA",
+          16 ~ "AP",
+          17 ~ "TO",
+          21 ~ "MA",
+          22 ~ "PI",
+          23 ~ "CE",
+          24 ~ "RN",
+          25 ~ "PB",
+          26 ~ "PE",
+          27 ~ "AL",
+          28 ~ "SE",
+          29 ~ "BA",
+          31 ~ "MG",
+          32 ~ "ES",
+          33 ~ "RJ",
+          35 ~ "SP",
+          41 ~ "PR",
+          42 ~ "SC",
+          43 ~ "RS",
+          50 ~ "MS",
+          51 ~ "MT",
+          52 ~ "GO",
+          53 ~ "DF"
+        )
       )
-    )
+  }
   
   # sex
   
-  df <- df %>%
-    dplyr::mutate(
-      sexo = dplyr::case_match(
-        V2007,
-        1 ~ "Homem",
-        2 ~ "Mulher"
+  if ("V2007" %in% names(df)) {
+    df <- df %>%
+      dplyr::mutate(
+        sexo = dplyr::case_match(
+          V2007,
+          1 ~ "Homem",
+          2 ~ "Mulher"
+        )
       )
-    )
+  }
   
   # age groups
   
-  df <- df %>%
-    dplyr::mutate(
-      faixa_idade = dplyr::case_when(
-        V2009 >= 14 & V2009 <= 17 ~ "Entre 14 e 17 anos",
-        V2009 >= 18 & V2009 <= 24 ~ "Entre 18 e 24 anos",
-        V2009 >= 25 & V2009 <= 29 ~ "Entre 25 e 29 anos",
-        V2009 >= 30 & V2009 <= 39 ~ "Entre 30 e 39 anos",
-        V2009 >= 40 & V2009 <= 49 ~ "Entre 40 e 49 anos",
-        V2009 >= 50 & V2009 <= 59 ~ "Entre 50 e 59 anos",
-        V2009 >= 60 ~ "60 anos ou mais"
+  if ("V2009" %in% names(df)) {
+    df <- df %>%
+      dplyr::mutate(
+        faixa_idade = dplyr::case_when(
+          V2009 >= 14 & V2009 <= 17 ~ "Entre 14 e 17 anos",
+          V2009 >= 18 & V2009 <= 24 ~ "Entre 18 e 24 anos",
+          V2009 >= 25 & V2009 <= 29 ~ "Entre 25 e 29 anos",
+          V2009 >= 30 & V2009 <= 39 ~ "Entre 30 e 39 anos",
+          V2009 >= 40 & V2009 <= 49 ~ "Entre 40 e 49 anos",
+          V2009 >= 50 & V2009 <= 59 ~ "Entre 50 e 59 anos",
+          V2009 >= 60 ~ "60 anos ou mais"
+        )
       )
-    )
+  }
   
   # education levels
   
-  df <- df %>%
-    dplyr::mutate(
-      faixa_educ = dplyr::case_match(
-        VD3004,
-        1 ~ "Sem instru\u00e7\u00e3o",
-        2 ~ "1 a 7 anos de estudo",
-        3 ~ "8 a 11 anos de estudo",
-        4:6 ~ "9 a 14 anos de estudo",
-        7 ~ "15 ou mais anos de estudo"
+  if ("VD3004" %in% names(df)) {
+    df <- df %>%
+      dplyr::mutate(
+        faixa_educ = dplyr::case_match(
+          VD3004,
+          1 ~ "Sem instru\u00e7\u00e3o",
+          2 ~ "1 a 7 anos de estudo",
+          3 ~ "8 a 11 anos de estudo",
+          4:6 ~ "9 a 14 anos de estudo",
+          7 ~ "15 ou mais anos de estudo"
+        )
       )
-    )
+  }
   
   # Labor Market definitions taken from:
   # https://github.com/datazoompuc/datazoom_labour_amazon/blob/main/Labour_Market/code/_definicoes_pnadcontinua_trimestral.do
   
   # habitual income from all occupations
   
-  df <- df %>%
-    dplyr::mutate(
-      rendimento_habitual = VD4019,
-      rendimento_habitual_real = VD4019 * Habitual
-    )
+  if (all(c("VD4019", "Habitual") %in% names(df))) {
+    df <- df %>%
+      dplyr::mutate(
+        rendimento_habitual = VD4019,
+        rendimento_habitual_real = VD4019 * Habitual
+      )
+  }
   
   # occupied status
   
-  df <- df %>%
-    dplyr::mutate(
-      ocupado = ifelse(VD4002 == 1, 1, 0),
-      desocupado = ifelse(VD4002 == 2, 1, 0)
-    )
+  if ("VD4002" %in% names(df)) {
+    df <- df %>%
+      dplyr::mutate(
+        ocupado = ifelse(VD4002 == 1, 1, 0),
+        desocupado = ifelse(VD4002 == 2, 1, 0)
+      )
+  }
   
   # formal vs. informal
+  # depends on derived columns ocupado/desocupado, so guard on both source and derived
   
-  df <- df %>%
-    dplyr::mutate(
-      formal = dplyr::case_when(
-        ocupado == 1 & VD4009 %in% c(1, 3, 5, 7) ~ 1,
-        ocupado == 1 & VD4009 == 9 & VD4012 == 1 ~ 1,
-        .default = 0
-      ),
-      informal = dplyr::case_when(
-        ocupado == 1 & VD4009 %in% c(2, 4, 6, 10) ~ 1,
-        ocupado == 1 & VD4009 == 9 & VD4012 == 2 ~ 1,
-        .default = 0
+  if (all(c("ocupado", "VD4009", "VD4012") %in% names(df))) {
+    df <- df %>%
+      dplyr::mutate(
+        formal = dplyr::case_when(
+          ocupado == 1 & VD4009 %in% c(1, 3, 5, 7) ~ 1,
+          ocupado == 1 & VD4009 == 9 & VD4012 == 1 ~ 1,
+          .default = 0
+        ),
+        informal = dplyr::case_when(
+          ocupado == 1 & VD4009 %in% c(2, 4, 6, 10) ~ 1,
+          ocupado == 1 & VD4009 == 9 & VD4012 == 2 ~ 1,
+          .default = 0
+        )
       )
-    )
+  }
   
   # public or private sector
   
-  df <- df %>%
-    dplyr::mutate(
-      publico = ifelse(V4012 %in% c(2, 4), 1, 0),
-      privado = ifelse(V4012 %in% c(1, 3, 5, 6, 7), 1, 0)
-    )
+  if ("V4012" %in% names(df)) {
+    df <- df %>%
+      dplyr::mutate(
+        publico = ifelse(V4012 %in% c(2, 4), 1, 0),
+        privado = ifelse(V4012 %in% c(1, 3, 5, 6, 7), 1, 0)
+      )
+  }
   
   # labor force
   
-  df <- df %>%
-    dplyr::mutate(
-      fora_forca_trab = ifelse(VD4001 == 2, 1, 0),
-      forca_trab = ifelse(VD4001 == 1, 1, 0)
-    )
+  if ("VD4001" %in% names(df)) {
+    df <- df %>%
+      dplyr::mutate(
+        fora_forca_trab = ifelse(VD4001 == 2, 1, 0),
+        forca_trab = ifelse(VD4001 == 1, 1, 0)
+      )
+  }
   
   # active population
   
-  df <- df %>%
-    dplyr::mutate(
-      pia = ifelse(V2009 >= 14, 1, 0),
-      idade_de_trabalhar = ifelse(V2009 >= 15 & V2009 <= 64, 1, 0),
-      pea = ocupado + desocupado
-    )
+  if (all(c("V2009", "ocupado", "desocupado") %in% names(df))) {
+    df <- df %>%
+      dplyr::mutate(
+        pia = ifelse(V2009 >= 14, 1, 0),
+        idade_de_trabalhar = ifelse(V2009 >= 15 & V2009 <= 64, 1, 0),
+        pea = ocupado + desocupado
+      )
+  }
   
   # unemployed
   
-  df <- df %>%
-    dplyr::mutate(
-      desempregado = forca_trab * desocupado,
-      desalentado = ifelse(VD4005 == 1, 1, 0)
-    )
+  if (all(c("forca_trab", "desocupado") %in% names(df))) {
+    df <- df %>%
+      dplyr::mutate(
+        desempregado = forca_trab * desocupado
+      )
+  }
+  
+  if ("VD4005" %in% names(df)) {
+    df <- df %>%
+      dplyr::mutate(
+        desalentado = ifelse(VD4005 == 1, 1, 0)
+      )
+  }
   
   # neet
   
-  df <- df %>%
-    dplyr::mutate(
-      nem_nem = dplyr::case_when(
-        desocupado == 1 & forca_trab == 1 & V3002 == 2 &
-          (V4074 != 6 | is.na(V4074)) & (V4074A != 8 | is.na(V4074A)) ~ 1,
-        fora_forca_trab == 1 & V3002 == 2 &
-          (V4074 != 6 | is.na(V4074)) & (V4074A != 8 | is.na(V4074A)) ~ 1,
-        .default = 0
+  if (all(c("desocupado", "forca_trab", "fora_forca_trab", "V3002") %in% names(df))) {
+    df <- df %>%
+      dplyr::mutate(
+        nem_nem = dplyr::case_when(
+          desocupado == 1 & forca_trab == 1 & V3002 == 2 &
+            (!"V4074"  %in% names(df) | V4074  != 6  | is.na(V4074)) &
+            (!"V4074A" %in% names(df) | V4074A != 8  | is.na(V4074A)) ~ 1,
+          fora_forca_trab == 1 & V3002 == 2 &
+            (!"V4074"  %in% names(df) | V4074  != 6  | is.na(V4074)) &
+            (!"V4074A" %in% names(df) | V4074A != 8  | is.na(V4074A)) ~ 1,
+          .default = 0
+        )
       )
-    )
+  }
   
   # positions in occupation
   
-  df <- df %>%
-    dplyr::mutate(
-      empregado_sc = ifelse(VD4009 %in% c(2, 4, 6, 10), 1, 0),
-      empregado_cc = ifelse(VD4009 %in% c(1, 3, 5), 1, 0),
-      conta_propria = ifelse(VD4009 == 9, 1, 0),
-      conta_propria_contrib = ifelse(VD4009 == 9 & VD4012 == 1, 1, 0),
-      conta_propria_nao_contrib = ifelse(VD4009 == 9 & VD4012 == 2, 1, 0),
-      empregador = ifelse(VD4009 == 8, 1, 0),
-      militar_estatutario = ifelse(VD4009 == 7, 1, 0),
-      home_office = ifelse(V4022 %in% c(4, 5), 1, 0)
-    )
+  if (all(c("VD4009", "VD4012", "V4022") %in% names(df))) {
+    df <- df %>%
+      dplyr::mutate(
+        empregado_sc = ifelse(VD4009 %in% c(2, 4, 6, 10), 1, 0),
+        empregado_cc = ifelse(VD4009 %in% c(1, 3, 5), 1, 0),
+        conta_propria = ifelse(VD4009 == 9, 1, 0),
+        conta_propria_contrib = ifelse(VD4009 == 9 & VD4012 == 1, 1, 0),
+        conta_propria_nao_contrib = ifelse(VD4009 == 9 & VD4012 == 2, 1, 0),
+        empregador = ifelse(VD4009 == 8, 1, 0),
+        militar_estatutario = ifelse(VD4009 == 7, 1, 0),
+        home_office = ifelse(V4022 %in% c(4, 5), 1, 0)
+      )
+  }
   
   # translating sector codes
   
-  df <- df %>%
-    dplyr::mutate(
-      cnae_2dig = substr(V4013, 1, 2),
-      cnae_2dig = dplyr::case_match(
-        cnae_2dig,
-        "00" ~ "Outros",
-        "01" ~ "Agricultura",
-        "02" ~ "Extra\u00e7\u00e3o florestal",
-        "03" ~ "Pesca, ca\u00e7a e aquicultura",
-        "05" ~ "Extra\u00e7\u00e3o mineral e de carv\u00e3o, petr\u00f3leo e g\u00e1s",
-        "06" ~ "Extra\u00e7\u00e3o mineral e de carv\u00e3o, petr\u00f3leo e g\u00e1s",
-        "07" ~ "Extra\u00e7\u00e3o mineral e de carv\u00e3o, petr\u00f3leo e g\u00e1s",
-        "08" ~ "Extra\u00e7\u00e3o mineral e de carv\u00e3o, petr\u00f3leo e g\u00e1s",
-        "09" ~ "Extra\u00e7\u00e3o mineral e de carv\u00e3o, petr\u00f3leo e g\u00e1s",
-        "10" ~ "Alimentos, bebidas e fumo",
-        "11" ~ "Alimentos, bebidas e fumo",
-        "12" ~ "Pecu\u00e1ria e cria\u00e7\u00e3o de animais",
-        "13" ~ "T\u00eaxtil, vestu\u00e1rio, couro e cal\u00e7ados",
-        "14" ~ "Pecu\u00e1ria e cria\u00e7\u00e3o de animais",
-        "15" ~ "Pesca, ca\u00e7a e aquicultura",
-        "16" ~ "Madeira, celulose e papel",
-        "17" ~ "Madeira, celulose e papel",
-        "18" ~ "Madeira, celulose e papel",
-        "19" ~ "Qu\u00edmicos, farmac\u00eauticos, borracha e pl\u00e1stico",
-        "20" ~ "Qu\u00edmicos, farmac\u00eauticos, borracha e pl\u00e1stico",
-        "21" ~ "Qu\u00edmicos, farmac\u00eauticos, borracha e pl\u00e1stico",
-        "22" ~ "Qu\u00edmicos, farmac\u00eauticos, borracha e pl\u00e1stico",
-        "23" ~ "Produtos de metal, minerais n\u00e3o-met\u00e1licos e metalurgia",
-        "24" ~ "Produtos de metal, minerais n\u00e3o-met\u00e1licos e metalurgia",
-        "25" ~ "Produtos de metal, minerais n\u00e3o-met\u00e1licos e metalurgia",
-        "26" ~ "Servi\u00e7os jur\u00eddicos",
-        "27" ~ "Eletr\u00f4nicos, m\u00e1quinas e equipamentos",
-        "28" ~ "Eletr\u00f4nicos, m\u00e1quinas e equipamentos",
-        "29" ~ "Autom\u00f3veis e equipamentos de transporte",
-        "30" ~ "Autom\u00f3veis e equipamentos de transporte",
-        "31" ~ "M\u00f3veis",
-        "32" ~ "Outros",
-        "34" ~ "Servi\u00e7os jur\u00eddicos",
-        "33" ~ "Eletr\u00f4nicos, m\u00e1quinas e equipamentos",
-        "35" ~ "Eletr\u00f4nicos, m\u00e1quinas e equipamentos",
-        "36" ~ "Eletr\u00f4nicos, m\u00e1quinas e equipamentos",
-        "37" ~ "Eletr\u00f4nicos, m\u00e1quinas e equipamentos",
-        "38" ~ "Eletr\u00f4nicos, m\u00e1quinas e equipamentos",
-        "39" ~ "Eletr\u00f4nicos, m\u00e1quinas e equipamentos",
-        "41" ~ "Constru\u00e7\u00e3o",
-        "42" ~ "Constru\u00e7\u00e3o",
-        "43" ~ "Constru\u00e7\u00e3o",
-        "45" ~ "Com\u00e9rcio",
-        "48" ~ "Com\u00e9rcio",
-        "49" ~ "Transporte e correio",
-        "50" ~ "Transporte e correio",
-        "51" ~ "Transporte e correio",
-        "52" ~ "Transporte e correio",
-        "53" ~ "Transporte e correio",
-        "55" ~ "Estadia e turismo",
-        "56" ~ "Servi\u00e7os de alimenta\u00e7\u00e3o",
-        "58" ~ "Servi\u00e7os de informa\u00e7\u00e3o e comunica\u00e7\u00e3o",
-        "59" ~ "Servi\u00e7os de informa\u00e7\u00e3o e comunica\u00e7\u00e3o",
-        "60" ~ "Servi\u00e7os de informa\u00e7\u00e3o e comunica\u00e7\u00e3o",
-        "61" ~ "Servi\u00e7os de informa\u00e7\u00e3o e comunica\u00e7\u00e3o",
-        "62" ~ "Servi\u00e7os de informa\u00e7\u00e3o e comunica\u00e7\u00e3o",
-        "63" ~ "Servi\u00e7os de informa\u00e7\u00e3o e comunica\u00e7\u00e3o",
-        "64" ~ "Servi\u00e7os financeiros e de seguros",
-        "65" ~ "Servi\u00e7os financeiros e de seguros",
-        "66" ~ "Servi\u00e7os financeiros e de seguros",
-        "68" ~ "Atividades profissionais, cient\u00edficas e t\u00e9cnicas",
-        "69" ~ "Atividades profissionais, cient\u00edficas e t\u00e9cnicas",
-        "70" ~ "Atividades profissionais, cient\u00edficas e t\u00e9cnicas",
-        "71" ~ "Atividades profissionais, cient\u00edficas e t\u00e9cnicas",
-        "72" ~ "Atividades profissionais, cient\u00edficas e t\u00e9cnicas",
-        "73" ~ "Atividades profissionais, cient\u00edficas e t\u00e9cnicas",
-        "74" ~ "Atividades profissionais, cient\u00edficas e t\u00e9cnicas",
-        "75" ~ "Atividades profissionais, cient\u00edficas e t\u00e9cnicas",
-        "78" ~ "Terceiriza\u00e7\u00e3o de m\u00e3o-de-obra",
-        "79" ~ "Estadia e turismo",
-        "80" ~ "Seguran\u00e7a e edif\u00edcios",
-        "81" ~ "Seguran\u00e7a e edif\u00edcios",
-        "82" ~ "Seguran\u00e7a e edif\u00edcios",
-        "84" ~ "Administra\u00e7\u00e3o p\u00fablica, defesa e seguridade social",
-        "85" ~ "Educa\u00e7\u00e3o",
-        "86" ~ "Sa\u00fade e assist\u00eancia social",
-        "87" ~ "Sa\u00fade e assist\u00eancia social",
-        "88" ~ "Sa\u00fade e assist\u00eancia social",
-        "90" ~ "Artes, cultura, esportes e recrea\u00e7\u00e3o",
-        "91" ~ "Artes, cultura, esportes e recrea\u00e7\u00e3o",
-        "92" ~ "Artes, cultura, esportes e recrea\u00e7\u00e3o",
-        "93" ~ "Artes, cultura, esportes e recrea\u00e7\u00e3o",
-        "94" ~ "Organiza\u00e7\u00f5es religiosas, sindicais e patronais",
-        "95" ~ "Servi\u00e7os de informa\u00e7\u00e3o e comunica\u00e7\u00e3o",
-        "96" ~ "Servi\u00e7os pessoais (cabelereiros, lavanderias, etc.)",
-        "97" ~ "Servi\u00e7os dom\u00e9sticos",
-        "99" ~ "Outros"
-      ),
-      cnae_2dig = dplyr::case_match(
-        V4013,
-        as.numeric(c(paste0(0, 1201:1209), paste0(0, 1402:1409), "01999")) ~ "Pecu\u00e1ria e cria\u00e7\u00e3o de animais",
-        .default = cnae_2dig
+  if ("V4013" %in% names(df)) {
+    df <- df %>%
+      dplyr::mutate(
+        cnae_2dig = substr(V4013, 1, 2),
+        cnae_2dig = dplyr::case_match(
+          cnae_2dig,
+          "00" ~ "Outros",
+          "01" ~ "Agricultura",
+          "02" ~ "Extra\u00e7\u00e3o florestal",
+          "03" ~ "Pesca, ca\u00e7a e aquicultura",
+          "05" ~ "Extra\u00e7\u00e3o mineral e de carv\u00e3o, petr\u00f3leo e g\u00e1s",
+          "06" ~ "Extra\u00e7\u00e3o mineral e de carv\u00e3o, petr\u00f3leo e g\u00e1s",
+          "07" ~ "Extra\u00e7\u00e3o mineral e de carv\u00e3o, petr\u00f3leo e g\u00e1s",
+          "08" ~ "Extra\u00e7\u00e3o mineral e de carv\u00e3o, petr\u00f3leo e g\u00e1s",
+          "09" ~ "Extra\u00e7\u00e3o mineral e de carv\u00e3o, petr\u00f3leo e g\u00e1s",
+          "10" ~ "Alimentos, bebidas e fumo",
+          "11" ~ "Alimentos, bebidas e fumo",
+          "12" ~ "Pecu\u00e1ria e cria\u00e7\u00e3o de animais",
+          "13" ~ "T\u00eaxtil, vestu\u00e1rio, couro e cal\u00e7ados",
+          "14" ~ "Pecu\u00e1ria e cria\u00e7\u00e3o de animais",
+          "15" ~ "Pesca, ca\u00e7a e aquicultura",
+          "16" ~ "Madeira, celulose e papel",
+          "17" ~ "Madeira, celulose e papel",
+          "18" ~ "Madeira, celulose e papel",
+          "19" ~ "Qu\u00edmicos, farmac\u00eauticos, borracha e pl\u00e1stico",
+          "20" ~ "Qu\u00edmicos, farmac\u00eauticos, borracha e pl\u00e1stico",
+          "21" ~ "Qu\u00edmicos, farmac\u00eauticos, borracha e pl\u00e1stico",
+          "22" ~ "Qu\u00edmicos, farmac\u00eauticos, borracha e pl\u00e1stico",
+          "23" ~ "Produtos de metal, minerais n\u00e3o-met\u00e1licos e metalurgia",
+          "24" ~ "Produtos de metal, minerais n\u00e3o-met\u00e1licos e metalurgia",
+          "25" ~ "Produtos de metal, minerais n\u00e3o-met\u00e1licos e metalurgia",
+          "26" ~ "Servi\u00e7os jur\u00eddicos",
+          "27" ~ "Eletr\u00f4nicos, m\u00e1quinas e equipamentos",
+          "28" ~ "Eletr\u00f4nicos, m\u00e1quinas e equipamentos",
+          "29" ~ "Autom\u00f3veis e equipamentos de transporte",
+          "30" ~ "Autom\u00f3veis e equipamentos de transporte",
+          "31" ~ "M\u00f3veis",
+          "32" ~ "Outros",
+          "33" ~ "Eletr\u00f4nicos, m\u00e1quinas e equipamentos",
+          "34" ~ "Servi\u00e7os jur\u00eddicos",
+          "35" ~ "Eletr\u00f4nicos, m\u00e1quinas e equipamentos",
+          "36" ~ "Eletr\u00f4nicos, m\u00e1quinas e equipamentos",
+          "37" ~ "Eletr\u00f4nicos, m\u00e1quinas e equipamentos",
+          "38" ~ "Eletr\u00f4nicos, m\u00e1quinas e equipamentos",
+          "39" ~ "Eletr\u00f4nicos, m\u00e1quinas e equipamentos",
+          "41" ~ "Constru\u00e7\u00e3o",
+          "42" ~ "Constru\u00e7\u00e3o",
+          "43" ~ "Constru\u00e7\u00e3o",
+          "45" ~ "Com\u00e9rcio",
+          "48" ~ "Com\u00e9rcio",
+          "49" ~ "Transporte e correio",
+          "50" ~ "Transporte e correio",
+          "51" ~ "Transporte e correio",
+          "52" ~ "Transporte e correio",
+          "53" ~ "Transporte e correio",
+          "55" ~ "Estadia e turismo",
+          "56" ~ "Servi\u00e7os de alimenta\u00e7\u00e3o",
+          "58" ~ "Servi\u00e7os de informa\u00e7\u00e3o e comunica\u00e7\u00e3o",
+          "59" ~ "Servi\u00e7os de informa\u00e7\u00e3o e comunica\u00e7\u00e3o",
+          "60" ~ "Servi\u00e7os de informa\u00e7\u00e3o e comunica\u00e7\u00e3o",
+          "61" ~ "Servi\u00e7os de informa\u00e7\u00e3o e comunica\u00e7\u00e3o",
+          "62" ~ "Servi\u00e7os de informa\u00e7\u00e3o e comunica\u00e7\u00e3o",
+          "63" ~ "Servi\u00e7os de informa\u00e7\u00e3o e comunica\u00e7\u00e3o",
+          "64" ~ "Servi\u00e7os financeiros e de seguros",
+          "65" ~ "Servi\u00e7os financeiros e de seguros",
+          "66" ~ "Servi\u00e7os financeiros e de seguros",
+          "68" ~ "Atividades profissionais, cient\u00edficas e t\u00e9cnicas",
+          "69" ~ "Atividades profissionais, cient\u00edficas e t\u00e9cnicas",
+          "70" ~ "Atividades profissionais, cient\u00edficas e t\u00e9cnicas",
+          "71" ~ "Atividades profissionais, cient\u00edficas e t\u00e9cnicas",
+          "72" ~ "Atividades profissionais, cient\u00edficas e t\u00e9cnicas",
+          "73" ~ "Atividades profissionais, cient\u00edficas e t\u00e9cnicas",
+          "74" ~ "Atividades profissionais, cient\u00edficas e t\u00e9cnicas",
+          "75" ~ "Atividades profissionais, cient\u00edficas e t\u00e9cnicas",
+          "78" ~ "Terceiriza\u00e7\u00e3o de m\u00e3o-de-obra",
+          "79" ~ "Estadia e turismo",
+          "80" ~ "Seguran\u00e7a e edif\u00edcios",
+          "81" ~ "Seguran\u00e7a e edif\u00edcios",
+          "82" ~ "Seguran\u00e7a e edif\u00edcios",
+          "84" ~ "Administra\u00e7\u00e3o p\u00fablica, defesa e seguridade social",
+          "85" ~ "Educa\u00e7\u00e3o",
+          "86" ~ "Sa\u00fade e assist\u00eancia social",
+          "87" ~ "Sa\u00fade e assist\u00eancia social",
+          "88" ~ "Sa\u00fade e assist\u00eancia social",
+          "90" ~ "Artes, cultura, esportes e recrea\u00e7\u00e3o",
+          "91" ~ "Artes, cultura, esportes e recrea\u00e7\u00e3o",
+          "92" ~ "Artes, cultura, esportes e recrea\u00e7\u00e3o",
+          "93" ~ "Artes, cultura, esportes e recrea\u00e7\u00e3o",
+          "94" ~ "Organiza\u00e7\u00f5es religiosas, sindicais e patronais",
+          "95" ~ "Servi\u00e7os de informa\u00e7\u00e3o e comunica\u00e7\u00e3o",
+          "96" ~ "Servi\u00e7os pessoais (cabelereiros, lavanderias, etc.)",
+          "97" ~ "Servi\u00e7os dom\u00e9sticos",
+          "99" ~ "Outros"
+        ),
+        cnae_2dig = dplyr::case_match(
+          V4013,
+          as.numeric(c(paste0(0, 1201:1209), paste0(0, 1402:1409), "01999")) ~ "Pecu\u00e1ria e cria\u00e7\u00e3o de animais",
+          .default = cnae_2dig
+        )
       )
-    )
+  }
   
   # translating occupation codes
   
-  df <- df %>%
-    dplyr::mutate(
-      cod_2dig = substr(V4010, 1, 2),
-      cod_2dig = dplyr::case_match(
-        cod_2dig,
-        "01" ~ "Policiais, bombeiros e for\u00e7as armadas",
-        "02" ~ "Policiais, bombeiros e for\u00e7as armadas",
-        "04" ~ "Policiais, bombeiros e for\u00e7as armadas",
-        "05" ~ "Policiais, bombeiros e for\u00e7as armadas",
-        "11" ~ "Trabalhadores no governo",
-        "12" ~ "Dirigentes e gerentes",
-        "13" ~ "Dirigentes e gerentes",
-        "14" ~ "Dirigentes e gerentes",
-        "21" ~ "Cientistas e engenheiros",
-        "22" ~ "Profissionais da sa\u00fade",
-        "23" ~ "Profissionais do ensino",
-        "24" ~ "Administradores e especialista em gest\u00e3o",
-        "25" ~ "Servi\u00e7os de TI e comunica\u00e7\u00e3o",
-        "26" ~ "Servi\u00e7os jur\u00eddicos",
-        "31" ~ "Cientistas e engenheiros",
-        "32" ~ "Profissionais da sa\u00fade",
-        "33" ~ "Servi\u00e7os financeiros e administrativos",
-        "34" ~ "Servi\u00e7os jur\u00eddicos",
-        "35" ~ "Servi\u00e7os de TI e comunica\u00e7\u00e3o",
-        "41" ~ "Escritur\u00e1rios",
-        "42" ~ "Atendimento direto ao p\u00fablico",
-        "43" ~ "Apoio administrativo",
-        "44" ~ "Apoio administrativo",
-        "51" ~ "Servi\u00e7os e cuidados pessoais",
-        "52" ~ "Vendedores",
-        "53" ~ "Servi\u00e7os e cuidados pessoais",
-        "54" ~ "Profissionais de seguran\u00e7a",
-        "61" ~ "Pecuaristas e criadores de animais",
-        "62" ~ "Pecuaristas e criadores de animais",
-        "71" ~ "Oper\u00e1rios da constru\u00e7\u00e3o, metalurgia e ind\u00fastria",
-        "72" ~ "Oper\u00e1rios da constru\u00e7\u00e3o, metalurgia e ind\u00fastria",
-        "73" ~ "Artes\u00f5es e artes gr\u00e1ficas",
-        "74" ~ "T\u00e9cnicos de eletricidade e eletr\u00f4nica",
-        "75" ~ "Oper\u00e1rios de processamento e instala\u00e7\u00f5es",
-        "81" ~ "Oper\u00e1rios de processamento e instala\u00e7\u00f5es",
-        "82" ~ "Montadores e condutores de ve\u00edculos",
-        "83" ~ "Montadores e condutores de ve\u00edculos",
-        "91" ~ "Dom\u00e9sticos",
-        "92" ~ "Pecuaristas e criadores de animais",
-        "93" ~ "Oper\u00e1rios da constru\u00e7\u00e3o, metalurgia e ind\u00fastria",
-        "94" ~ "Profissionais em alimenta\u00e7\u00e3o",
-        "95" ~ "Ambulantes",
-        "96" ~ "Coletores de lixo"
-      ),
-      cod_2dig = ifelse(V4010 == 9215, "Extrativistas florestais", cod_2dig)
-    )
+  if ("V4010" %in% names(df)) {
+    df <- df %>%
+      dplyr::mutate(
+        cod_2dig = substr(V4010, 1, 2),
+        cod_2dig = dplyr::case_match(
+          cod_2dig,
+          "01" ~ "Policiais, bombeiros e for\u00e7as armadas",
+          "02" ~ "Policiais, bombeiros e for\u00e7as armadas",
+          "04" ~ "Policiais, bombeiros e for\u00e7as armadas",
+          "05" ~ "Policiais, bombeiros e for\u00e7as armadas",
+          "11" ~ "Trabalhadores no governo",
+          "12" ~ "Dirigentes e gerentes",
+          "13" ~ "Dirigentes e gerentes",
+          "14" ~ "Dirigentes e gerentes",
+          "21" ~ "Cientistas e engenheiros",
+          "22" ~ "Profissionais da sa\u00fade",
+          "23" ~ "Profissionais do ensino",
+          "24" ~ "Administradores e especialista em gest\u00e3o",
+          "25" ~ "Servi\u00e7os de TI e comunica\u00e7\u00e3o",
+          "26" ~ "Servi\u00e7os jur\u00eddicos",
+          "31" ~ "Cientistas e engenheiros",
+          "32" ~ "Profissionais da sa\u00fade",
+          "33" ~ "Servi\u00e7os financeiros e administrativos",
+          "34" ~ "Servi\u00e7os jur\u00eddicos",
+          "35" ~ "Servi\u00e7os de TI e comunica\u00e7\u00e3o",
+          "41" ~ "Escritur\u00e1rios",
+          "42" ~ "Atendimento direto ao p\u00fablico",
+          "43" ~ "Apoio administrativo",
+          "44" ~ "Apoio administrativo",
+          "51" ~ "Servi\u00e7os e cuidados pessoais",
+          "52" ~ "Vendedores",
+          "53" ~ "Servi\u00e7os e cuidados pessoais",
+          "54" ~ "Profissionais de seguran\u00e7a",
+          "61" ~ "Pecuaristas e criadores de animais",
+          "62" ~ "Pecuaristas e criadores de animais",
+          "71" ~ "Oper\u00e1rios da constru\u00e7\u00e3o, metalurgia e ind\u00fastria",
+          "72" ~ "Oper\u00e1rios da constru\u00e7\u00e3o, metalurgia e ind\u00fastria",
+          "73" ~ "Artes\u00f5es e artes gr\u00e1ficas",
+          "74" ~ "T\u00e9cnicos de eletricidade e eletr\u00f4nica",
+          "75" ~ "Oper\u00e1rios de processamento e instala\u00e7\u00f5es",
+          "81" ~ "Oper\u00e1rios de processamento e instala\u00e7\u00f5es",
+          "82" ~ "Montadores e condutores de ve\u00edculos",
+          "83" ~ "Montadores e condutores de ve\u00edculos",
+          "91" ~ "Dom\u00e9sticos",
+          "92" ~ "Pecuaristas e criadores de animais",
+          "93" ~ "Oper\u00e1rios da constru\u00e7\u00e3o, metalurgia e ind\u00fastria",
+          "94" ~ "Profissionais em alimenta\u00e7\u00e3o",
+          "95" ~ "Ambulantes",
+          "96" ~ "Coletores de lixo"
+        ),
+        cod_2dig = ifelse(V4010 == 9215, "Extrativistas florestais", cod_2dig)
+      )
+  }
   
   return(df)
 }
