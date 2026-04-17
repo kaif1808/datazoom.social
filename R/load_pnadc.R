@@ -51,6 +51,17 @@
 #'   \code{V20082}, \code{V20081}, \code{V2008} (and \code{V2003} for
 #'   \code{"advanced"}) are likely to be auto-added.
 #'
+#' @param output_vars A \code{character} vector of column names to retain in
+#'   the dataset after each quarter is processed (post-treatment names when
+#'   \code{raw_data = FALSE}). Reduces peak memory by discarding all other
+#'   columns before quarters are combined and panel matching runs. Panel
+#'   identification columns (\code{UPA}, \code{V1008}, \code{V2007},
+#'   \code{V20082}, \code{V20081}, \code{V2008}; plus \code{V2003} for
+#'   \code{"advanced"}) and structural columns (\code{UF}, \code{Habitual},
+#'   \code{ID_DOMICILIO}, \code{V1014}) are always kept regardless of this
+#'   argument. Use \code{NULL} (the default) to retain all columns (original
+#'   behaviour).
+#'
 #' @return A message indicating the successful save of panel files.
 #'
 #' @importFrom data.table fread
@@ -72,7 +83,7 @@
 load_pnadc <- function(save_to = getwd(), years,
                        quarters = 1:4, panel = "advanced",
                        raw_data = FALSE, save_options = c(TRUE, TRUE),
-                       vars = NULL) {
+                       vars = NULL, output_vars = NULL) {
   # Check if PNADcIBGE namespace is already attached
   if (!"PNADcIBGE" %in% .packages()) {
     # If not attached, attach it
@@ -108,6 +119,7 @@ load_pnadc <- function(save_to = getwd(), years,
   param$save_to   <- save_to   # the directory in which the user desires to save the files downloaded
   param$save_quarters <- save_options[1] # whether to save quarterly files to disk
   param$csv           <- save_options[2] # if TRUE, saves as .csv; if FALSE, saves as .parquet
+  param$output_vars   <- output_vars
   
   # Check if quarter is a list; if not, wrap it in a list and repeat it for each year
   if (!is.list(quarters)) {
@@ -193,7 +205,28 @@ load_pnadc <- function(save_to = getwd(), years,
         }
         
         cnames <<- names(df)
-        
+
+        # Trim to a memory-efficient column subset when output_vars is specified.
+        # This runs per-quarter, before list_rbind(), so each quarter in memory
+        # is already small. Panel match columns and structural identifiers are
+        # always kept regardless of output_vars.
+        if (!is.null(param$output_vars)) {
+          panel_match_cols <- if (param$panel == "none") {
+            character(0)
+          } else if (param$panel == "advanced") {
+            panel_required_advanced
+          } else {
+            panel_required_basic
+          }
+          cols_to_keep <- unique(c(
+            "UF", "Habitual", "ID_DOMICILIO", "V1014",
+            panel_match_cols,
+            param$output_vars,
+            if (!is.null(vars)) vars else character(0)
+          ))
+          df <- df %>% dplyr::select(dplyr::any_of(cols_to_keep))
+        }
+
         # tag each row with its year and quarter for later reference
         df$Ano       <- year
         df$Trimestre <- quarter
