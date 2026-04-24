@@ -11,7 +11,9 @@ load_pnadc(
   panel = "advanced",
   raw_data = FALSE,
   save_options = c(TRUE, TRUE),
-  vars = NULL
+  vars = NULL,
+  output_vars = NULL,
+  ensure_pnadc_vars = NULL
 )
 }
 \arguments{
@@ -68,7 +70,40 @@ Note that several of these (\code{UPA}, \code{V1008}, \code{V1014}) are
 part of the structural columns always returned by
 \code{\link[PNADcIBGE]{get_pnadc}}, so in practice only \code{V2007},
 \code{V20082}, \code{V20081}, \code{V2008} (and \code{V2003} for
-\code{"advanced"}) are likely to be auto-added.}
+\code{"advanced"}) are likely to be auto-added.
+
+For the PNAD-C checklist in \code{PNAD-C_REQUIRED_VARS.md}, the minimal raw
+names are not always sufficient for \code{treat_pnadc()} to build treated
+columns (for example \code{rendimento_habitual_real} needs \code{VD4019}).
+When \code{ensure_pnadc_vars} is enabled and \code{vars} is not
+\code{NULL}, additional IBGE columns are unioned into \code{vars}
+automatically before download.}
+
+\item{output_vars}{A \code{character} vector of column names to retain in
+the dataset after each quarter is processed (post-treatment names when
+\code{raw_data = FALSE}). Reduces peak memory by discarding all other
+columns before quarters are combined and panel matching runs. Panel
+identification columns (\code{UPA}, \code{V1008}, \code{V2007},
+\code{V20082}, \code{V20081}, \code{V2008}; plus \code{V2003} for
+\code{"advanced"}) and structural columns (\code{UF}, \code{Habitual},
+\code{ID_DOMICILIO}, \code{V1014}) are always kept regardless of this
+argument. Use \code{NULL} (the default) to retain all columns (original
+behaviour).
+
+Names should use post-treatment labels when \code{raw_data = FALSE} (see
+\code{PNAD-C_REQUIRED_VARS.md}: e.g. \code{sexo}, \code{faixa_idade},
+\code{rendimento_habitual_real}). Related treated columns implied by your
+selection (e.g. \code{ocupado} when requesting \code{formal}) are also
+retained when trimming.}
+
+\item{ensure_pnadc_vars}{Logical. When \code{NULL} (default), treated as
+\code{!raw_data}: for processed downloads, automatically union IBGE columns
+into \code{vars} (when \code{vars} is not \code{NULL}) so \code{treat_pnadc()}
+can create outputs aligned with \code{PNAD-C_REQUIRED_VARS.md} (e.g.
+\code{VD4019} for \code{rendimento_habitual_real}, labor-module columns for
+\code{formal}/\code{informal}/\code{ocupado}, etc.). Set \code{FALSE} to
+disable. Ignored when \code{raw_data = TRUE} or when \code{vars} is
+\code{NULL} (full microdata already includes inputs).}
 }
 \value{
 A message indicating the successful save of panel files.
@@ -77,7 +112,7 @@ A message indicating the successful save of panel files.
 This function downloads PNADC data and applies panel identification algorithms
 }
 \examples{
-\dontshow{if (interactive()) (if (getRversion() >= "3.4") withAutoprint else force)(\{ # examplesIf}
+\dontshow{if (interactive()) withAutoprint(\{ # examplesIf}
 ### DO NOT RUN ###
 load_pnadc(
   save_to = getwd(),

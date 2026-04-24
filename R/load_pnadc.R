@@ -51,6 +51,13 @@
 #'   \code{V20082}, \code{V20081}, \code{V2008} (and \code{V2003} for
 #'   \code{"advanced"}) are likely to be auto-added.
 #'
+#'   For the PNAD-C checklist in \code{PNAD-C_REQUIRED_VARS.md}, the minimal raw
+#'   names are not always sufficient for \code{treat_pnadc()} to build treated
+#'   columns (for example \code{rendimento_habitual_real} needs \code{VD4019}).
+#'   When \code{ensure_pnadc_vars} is enabled and \code{vars} is not
+#'   \code{NULL}, additional IBGE columns are unioned into \code{vars}
+#'   automatically before download.
+#'
 #' @param output_vars A \code{character} vector of column names to retain in
 #'   the dataset after each quarter is processed (post-treatment names when
 #'   \code{raw_data = FALSE}). Reduces peak memory by discarding all other
@@ -61,6 +68,21 @@
 #'   \code{ID_DOMICILIO}, \code{V1014}) are always kept regardless of this
 #'   argument. Use \code{NULL} (the default) to retain all columns (original
 #'   behaviour).
+#'
+#'   Names should use post-treatment labels when \code{raw_data = FALSE} (see
+#'   \code{PNAD-C_REQUIRED_VARS.md}: e.g. \code{sexo}, \code{faixa_idade},
+#'   \code{rendimento_habitual_real}). Related treated columns implied by your
+#'   selection (e.g. \code{ocupado} when requesting \code{formal}) are also
+#'   retained when trimming.
+#'
+#' @param ensure_pnadc_vars Logical. When \code{NULL} (default), treated as
+#'   \code{!raw_data}: for processed downloads, automatically union IBGE columns
+#'   into \code{vars} (when \code{vars} is not \code{NULL}) so \code{treat_pnadc()}
+#'   can create outputs aligned with \code{PNAD-C_REQUIRED_VARS.md} (e.g.
+#'   \code{VD4019} for \code{rendimento_habitual_real}, labor-module columns for
+#'   \code{formal}/\code{informal}/\code{ocupado}, etc.). Set \code{FALSE} to
+#'   disable. Ignored when \code{raw_data = TRUE} or when \code{vars} is
+#'   \code{NULL} (full microdata already includes inputs).
 #'
 #' @return A message indicating the successful save of panel files.
 #'
@@ -83,7 +105,8 @@
 load_pnadc <- function(save_to = getwd(), years,
                        quarters = 1:4, panel = "advanced",
                        raw_data = FALSE, save_options = c(TRUE, TRUE),
-                       vars = NULL, output_vars = NULL) {
+                       vars = NULL, output_vars = NULL,
+                       ensure_pnadc_vars = NULL) {
   # Check if PNADcIBGE namespace is already attached
   if (!"PNADcIBGE" %in% .packages()) {
     # If not attached, attach it
@@ -120,7 +143,12 @@ load_pnadc <- function(save_to = getwd(), years,
   param$save_quarters <- save_options[1] # whether to save quarterly files to disk
   param$csv           <- save_options[2] # if TRUE, saves as .csv; if FALSE, saves as .parquet
   param$output_vars   <- output_vars
-  
+  param$ensure_pnadc_vars <- if (is.null(ensure_pnadc_vars)) {
+    !raw_data
+  } else {
+    ensure_pnadc_vars
+  }
+
   # Check if quarter is a list; if not, wrap it in a list and repeat it for each year
   if (!is.list(quarters)) {
     param$quarters <- rep(list(quarters), length(years))
@@ -167,6 +195,21 @@ load_pnadc <- function(save_to = getwd(), years,
       )
       vars <- c(vars, missing_cols)
     }
+  }
+
+  aug <- .augment_vars_for_pnadc_c(
+    vars = vars,
+    output_vars = output_vars,
+    ensure_pnadc_vars = param$ensure_pnadc_vars,
+    raw_data = param$raw_data
+  )
+  if (length(aug$added) > 0) {
+    message(
+      "Adding IBGE columns for PNAD-C treated outputs: ",
+      paste(aug$added, collapse = ", "),
+      "\n"
+    )
+    vars <- aug$vars
   }
   
   ##################
@@ -218,10 +261,12 @@ load_pnadc <- function(save_to = getwd(), years,
           } else {
             panel_required_basic
           }
+          implied_treated <- .pnadc_implied_treated_outputs(param$output_vars)
+          output_keep <- unique(c(param$output_vars, implied_treated))
           cols_to_keep <- unique(c(
             "UF", "Habitual", "ID_DOMICILIO", "V1014",
             panel_match_cols,
-            param$output_vars,
+            output_keep,
             if (!is.null(vars)) vars else character(0)
           ))
           df <- df %>% dplyr::select(dplyr::any_of(cols_to_keep))
@@ -244,6 +289,18 @@ load_pnadc <- function(save_to = getwd(), years,
   
   # bind all quarters into one data frame
   all_quarters <- purrr::list_rbind(source_files)
+
+  if (!is.null(param$output_vars) && isTRUE(param$ensure_pnadc_vars) && !param$raw_data) {
+    miss_ov <- setdiff(param$output_vars, names(all_quarters))
+    if (length(miss_ov) > 0) {
+      warning(
+        "After processing, these `output_vars` were not found in the combined data: ",
+        paste(miss_ov, collapse = ", "),
+        ". Inputs may be absent for this vintage, or treatment could not derive them.",
+        call. = FALSE
+      )
+    }
+  }
   
   # save quarterly files to disk if requested
   if (param$save_quarters) {
@@ -340,18 +397,40 @@ load_pnadc <- function(save_to = getwd(), years,
         }
       )
     } else {
-      # Parquet: bind all panels and write a partitioned dataset grouped by V1014
-      all_panels <- purrr::list_rbind(identified_panels)
+      # Parquet: write each panel directly to disk to avoid a huge in-memory bind.
       panels_dir <- file.path(param$save_to, "pnadc_panels")
+      panels_file <- file.path(param$save_to, "pnadc_matched.parquet")
+      dir.create(panels_dir, recursive = TRUE, showWarnings = FALSE)
       message(paste(
-        "Saving partitioned panel parquet dataset to", panels_dir, "\n"
+        "Saving panel parquet files to", panels_dir, "\n"
       ))
-      all_panels %>%
-        dplyr::group_by(V1014) %>%
-        arrow::write_dataset(
-          path = panels_dir,
-          format = "parquet"
-        )
+      purrr::map2(
+        identified_panels, panel_list,
+        function(df, p) {
+          panel_subdir <- file.path(panels_dir, paste0("V1014=", p))
+          dir.create(panel_subdir, recursive = TRUE, showWarnings = FALSE)
+          panel_file <- file.path(panel_subdir, paste0("panel_", p, ".parquet"))
+          arrow::write_parquet(df, sink = panel_file)
+        }
+      )
+
+      # Try to also save a single consolidated parquet file. If memory is not
+      # sufficient, keep the per-panel parquet outputs and continue.
+      message(paste("Attempting consolidated matched parquet at", panels_file, "\n"))
+      tryCatch(
+        {
+          all_panels <- purrr::list_rbind(identified_panels)
+          arrow::write_parquet(all_panels, sink = panels_file)
+        },
+        error = function(e) {
+          warning(
+            "Could not write consolidated `pnadc_matched.parquet` due to memory limits. ",
+            "Per-panel parquet files were saved in `pnadc_panels/` and can be queried directly. ",
+            "Original error: ", conditionMessage(e),
+            call. = FALSE
+          )
+        }
+      )
     }
   }
   
