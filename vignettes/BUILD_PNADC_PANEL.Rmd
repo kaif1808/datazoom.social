@@ -95,3 +95,24 @@ knitr::kable(
 ```
 
 Each cell is the percentage of PNADC observations that are identified by the advanced algorithm in each interview.
+
+## Parquet-native workflow for large datasets
+
+For large runs, you can execute panel identification directly from parquet
+inputs instead of materializing all quarters in memory.
+
+```{r eval=FALSE}
+build_pnadc_panel_parquet(
+  input = "data/full_2012_2025/pnadc_quarters",
+  panel = "advanced",
+  output_path = "data/full_2012_2025",
+  backend = "arrow",
+  single_file = TRUE,
+  overwrite = TRUE
+)
+```
+
+`load_pnadc()` also exposes this flow with:
+
+- `panel_mode = "parquet_native"`
+- `panel_backend = "arrow"` or `"duckdb"`

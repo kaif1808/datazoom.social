@@ -13,7 +13,9 @@ load_pnadc(
   save_options = c(TRUE, TRUE),
   vars = NULL,
   output_vars = NULL,
-  ensure_pnadc_vars = NULL
+  ensure_pnadc_vars = NULL,
+  panel_mode = c("in_memory", "parquet_native"),
+  panel_backend = c("arrow", "duckdb")
 )
 }
 \arguments{
@@ -104,6 +106,14 @@ can create outputs aligned with \code{PNAD-C_REQUIRED_VARS.md} (e.g.
 \code{formal}/\code{informal}/\code{ocupado}, etc.). Set \code{FALSE} to
 disable. Ignored when \code{raw_data = TRUE} or when \code{vars} is
 \code{NULL} (full microdata already includes inputs).}
+
+\item{panel_mode}{Character. \code{"in_memory"} (default) keeps legacy panel
+build behavior. \code{"parquet_native"} writes quarter parquet partitions
+and runs panel identification from parquet inputs through
+\code{build_pnadc_panel_parquet()}.}
+
+\item{panel_backend}{Character backend for parquet-native mode:
+\code{"arrow"} (default) or \code{"duckdb"}.}
 }
 \value{
 A message indicating the successful save of panel files.

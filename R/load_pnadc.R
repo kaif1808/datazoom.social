@@ -83,6 +83,12 @@
 #'   \code{formal}/\code{informal}/\code{ocupado}, etc.). Set \code{FALSE} to
 #'   disable. Ignored when \code{raw_data = TRUE} or when \code{vars} is
 #'   \code{NULL} (full microdata already includes inputs).
+#' @param panel_mode Character. \code{"in_memory"} (default) keeps legacy panel
+#'   build behavior. \code{"parquet_native"} writes quarter parquet partitions
+#'   and runs panel identification from parquet inputs through
+#'   \code{build_pnadc_panel_parquet()}.
+#' @param panel_backend Character backend for parquet-native mode:
+#'   \code{"arrow"} (default) or \code{"duckdb"}.
 #'
 #' @return A message indicating the successful save of panel files.
 #'
@@ -106,7 +112,9 @@ load_pnadc <- function(save_to = getwd(), years,
                        quarters = 1:4, panel = "advanced",
                        raw_data = FALSE, save_options = c(TRUE, TRUE),
                        vars = NULL, output_vars = NULL,
-                       ensure_pnadc_vars = NULL) {
+                       ensure_pnadc_vars = NULL,
+                       panel_mode = c("in_memory", "parquet_native"),
+                       panel_backend = c("arrow", "duckdb")) {
   # Check if PNADcIBGE namespace is already attached
   if (!"PNADcIBGE" %in% .packages()) {
     # If not attached, attach it
@@ -148,6 +156,8 @@ load_pnadc <- function(save_to = getwd(), years,
   } else {
     ensure_pnadc_vars
   }
+  param$panel_mode <- match.arg(panel_mode)
+  param$panel_backend <- match.arg(panel_backend)
 
   # Check if quarter is a list; if not, wrap it in a list and repeat it for each year
   if (!is.list(quarters)) {
@@ -287,10 +297,13 @@ load_pnadc <- function(save_to = getwd(), years,
   # Save all quarters to a single parquet file (list of data frames as separate row groups / named list)
   quarters_parquet_path <- file.path(param$save_to, "pnadc_quarters.parquet")
   
-  # bind all quarters into one data frame
-  all_quarters <- purrr::list_rbind(source_files)
+  # bind all quarters into one data frame only in legacy in-memory mode
+  all_quarters <- NULL
+  if (param$panel_mode == "in_memory" || param$csv || param$panel == "none") {
+    all_quarters <- purrr::list_rbind(source_files)
+  }
 
-  if (!is.null(param$output_vars) && isTRUE(param$ensure_pnadc_vars) && !param$raw_data) {
+  if (!is.null(all_quarters) && !is.null(param$output_vars) && isTRUE(param$ensure_pnadc_vars) && !param$raw_data) {
     miss_ov <- setdiff(param$output_vars, names(all_quarters))
     if (length(miss_ov) > 0) {
       warning(
@@ -303,6 +316,7 @@ load_pnadc <- function(save_to = getwd(), years,
   }
   
   # save quarterly files to disk if requested
+  quarters_dir <- file.path(param$save_to, "pnadc_quarters")
   if (param$save_quarters) {
     if (param$csv) {
       # CSV: write one flat file per year-quarter
@@ -319,7 +333,6 @@ load_pnadc <- function(save_to = getwd(), years,
       )
     } else {
       # Parquet: write a partitioned dataset grouped by Ano/Trimestre
-      quarters_dir <- file.path(param$save_to, "pnadc_quarters")
       base::message(paste0(
         "Saving quarterly parquet dataset to\n", quarters_dir, "\n"
       ))
@@ -343,6 +356,32 @@ load_pnadc <- function(save_to = getwd(), years,
   #################
   
   if (param$panel != "none") {
+    if (param$panel_mode == "parquet_native" && !param$csv) {
+      # Ensure quarter parquet dataset exists for parquet-native panel build.
+      if (!dir.exists(quarters_dir)) {
+        dir.create(quarters_dir, recursive = TRUE, showWarnings = FALSE)
+        purrr::walk(source_files, function(df) {
+          arrow::write_dataset(
+            dplyr::group_by(df, Ano, Trimestre),
+            path = quarters_dir,
+            format = "parquet",
+            existing_data_behavior = "overwrite_or_ignore"
+          )
+        })
+      }
+
+      build_pnadc_panel_parquet(
+        input = quarters_dir,
+        panel = param$panel,
+        output_path = param$save_to,
+        backend = param$panel_backend,
+        single_file = TRUE,
+        overwrite = TRUE
+      )
+
+      return(paste("Panel parquet files saved to", file.path(param$save_to, "pnadc_panels")))
+    }
+
     ## Split data into panels
     
     panel_list <- unique(panel_list) # listing all the panels included in the quarters downloaded
